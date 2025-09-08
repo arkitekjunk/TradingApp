@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    @apply h-full;
+  }
+  
+  #root {
+    @apply h-full;
+  }
+}
+
+@layer components {
+  .trading-card {
+    @apply bg-gray-800 border border-gray-700 rounded-lg shadow-lg;
+  }
+  
+  .trading-button {
+    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+  }
+  
+  .trading-button-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white;
+  }
+  
+  .trading-button-success {
+    @apply bg-green-600 hover:bg-green-700 text-white;
+  }
+  
+  .trading-button-danger {
+    @apply bg-red-600 hover:bg-red-700 text-white;
+  }
+  
+  .trading-input {
+    @apply bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500;
+  }
+  
+  .trading-select {
+    @apply bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500;
+  }
+  
+  .status-indicator {
+    @apply inline-block w-2 h-2 rounded-full mr-2;
+  }
+  
+  .status-connected {
+    @apply bg-green-500;
+  }
+  
+  .status-disconnected {
+    @apply bg-red-500;
+  }
+  
+  .status-connecting {
+    @apply bg-yellow-500;
+  }
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
