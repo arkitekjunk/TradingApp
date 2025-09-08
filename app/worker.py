@@ -146,7 +146,7 @@ class FinnhubWorker:
     """Main worker class that handles backfilling and live streaming."""
     
     def __init__(self):
-        self.api_key = settings.finnhub_api_key
+        self._refresh_api_key()
         self.is_running = False
         self.ws_connected = False
         self.ws = None
@@ -177,6 +177,14 @@ class FinnhubWorker:
         
         # Session state for VWAP resets
         self.last_vwap_reset_time = None
+    
+    def _refresh_api_key(self):
+        """Refresh API key from database settings or fallback to env."""
+        from app.data_access import db
+        self.api_key = db.get_setting("FINNHUB_API_KEY") or settings.finnhub_api_key
+        
+        if not self.api_key or self.api_key == "your_finnhub_api_key_here":
+            raise ValueError("Valid Finnhub API key is required. Please set it in the settings.")
         
         # Graceful shutdown handling
         self.shutdown_requested = False
@@ -192,6 +200,10 @@ class FinnhubWorker:
         try:
             logger.info("Starting Finnhub worker...")
             self.is_running = True
+            
+            # Refresh API key from latest settings
+            self._refresh_api_key()
+            logger.info("API key refreshed from settings")
             
             # 1. Fetch universe symbols
             logger.info("Fetching universe symbols...")

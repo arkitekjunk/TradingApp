@@ -27,7 +27,8 @@ class UniverseManager:
         logger.info("Fetching fresh universe data from Finnhub")
         try:
             symbols = await self._fetch_universe_from_api()
-            self._cache_universe(symbols)
+            if symbols:  # Only cache if we got valid symbols
+                self._cache_universe(symbols)
             return symbols
         except Exception as e:
             logger.error(f"Failed to fetch universe: {e}")
@@ -35,10 +36,19 @@ class UniverseManager:
             # Fall back to cache if API fails
             if self.cache_file.exists():
                 logger.warning("API failed, falling back to cached data")
-                return self._load_cached_universe()
-            else:
-                logger.error("No cached data available")
-                return []
+                cached_symbols = self._load_cached_universe()
+                if cached_symbols:
+                    return cached_symbols
+            
+            # If no cache, return fallback symbols
+            logger.warning("No cached data available, using fallback symbols")
+            fallback_symbols = [
+                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX',
+                'JPM', 'V', 'WMT', 'PG', 'HD', 'MA', 'BAC', 'DIS',
+                'ADBE', 'CRM', 'PYPL', 'INTC', 'CSCO', 'PEP', 'TMO', 'ABT'
+            ]
+            logger.info(f"Using {len(fallback_symbols)} fallback symbols for testing")
+            return fallback_symbols
     
     def _is_cache_valid(self) -> bool:
         """Check if the cached universe data is still valid."""
@@ -87,10 +97,17 @@ class UniverseManager:
         """Fetch universe constituents from Finnhub API."""
         universe_symbol = get_config_value("defaults.universe_symbol", "^NDX")
         
+        # Get API key from database settings (updated via UI) or fallback to env
+        from app.data_access import db
+        api_key = db.get_setting("FINNHUB_API_KEY") or settings.finnhub_api_key
+        
+        if not api_key or api_key == "your_finnhub_api_key_here":
+            raise ValueError("Valid Finnhub API key is required. Please set it in the settings.")
+        
         url = "https://finnhub.io/api/v1/index/constituents"
         params = {
             'symbol': universe_symbol,
-            'token': settings.finnhub_api_key
+            'token': api_key
         }
         
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -107,11 +124,15 @@ class UniverseManager:
             
             if not constituents:
                 logger.warning(f"No constituents found for {universe_symbol}")
-                # Return some default symbols as fallback
+                # Return comprehensive fallback symbols for testing
                 fallback_symbols = [
-                    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX'
+                    # Tech giants
+                    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX',
+                    # Other major stocks  
+                    'JPM', 'V', 'WMT', 'PG', 'HD', 'MA', 'BAC', 'DIS',
+                    'ADBE', 'CRM', 'PYPL', 'INTC', 'CSCO', 'PEP', 'TMO', 'ABT'
                 ]
-                logger.warning(f"Using fallback symbols: {fallback_symbols}")
+                logger.warning(f"Using fallback symbols ({len(fallback_symbols)} stocks): {fallback_symbols[:5]}...")
                 return fallback_symbols
             
             # Filter out any invalid symbols
