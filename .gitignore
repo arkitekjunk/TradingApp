@@ -1,0 +1,37 @@
+# Environment files
+.env
+.env.*
+
+# Database files
+*.db
+*.db-*
+
+# Data and logs
+data/
+logs/
+ui/logs/
+
+# Build output
+static/
+ui/dist/
+ui/build/
+
+# Dependencies
+ui/node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp

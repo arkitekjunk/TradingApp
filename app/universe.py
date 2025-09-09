@@ -40,12 +40,19 @@ class UniverseManager:
                 if cached_symbols:
                     return cached_symbols
             
-            # If no cache, return fallback symbols
-            logger.warning("No cached data available, using fallback symbols")
+            # If no cache, return fallback symbols (Top 50 S&P 500 stocks - respects free plan limit)
+            logger.warning("No cached data available, using top 50 fallback symbols")
             fallback_symbols = [
-                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX',
-                'JPM', 'V', 'WMT', 'PG', 'HD', 'MA', 'BAC', 'DIS',
-                'ADBE', 'CRM', 'PYPL', 'INTC', 'CSCO', 'PEP', 'TMO', 'ABT'
+                # Top 10 by market cap
+                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'UNH', 'JNJ',
+                
+                # Next 20 largest
+                'XOM', 'JPM', 'V', 'WMT', 'PG', 'HD', 'CVX', 'MA', 'BAC', 'ABBV',
+                'PFE', 'AVGO', 'KO', 'LLY', 'COST', 'PEP', 'MRK', 'TMO', 'DIS', 'ABT',
+                
+                # Tech & Growth (top 20)
+                'NFLX', 'ADBE', 'CRM', 'ORCL', 'ACN', 'CSCO', 'TXN', 'QCOM', 'INTC', 'AMD',
+                'IBM', 'NOW', 'UBER', 'PYPL', 'SHOP', 'SNOW', 'ZM', 'DOCU', 'OKTA', 'TWLO'
             ]
             logger.info(f"Using {len(fallback_symbols)} fallback symbols for testing")
             return fallback_symbols
@@ -124,13 +131,18 @@ class UniverseManager:
             
             if not constituents:
                 logger.warning(f"No constituents found for {universe_symbol}")
-                # Return comprehensive fallback symbols for testing
+                # Return comprehensive fallback symbols for testing (Top 50 - respects free plan limit)
                 fallback_symbols = [
-                    # Tech giants
-                    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX',
-                    # Other major stocks  
-                    'JPM', 'V', 'WMT', 'PG', 'HD', 'MA', 'BAC', 'DIS',
-                    'ADBE', 'CRM', 'PYPL', 'INTC', 'CSCO', 'PEP', 'TMO', 'ABT'
+                    # Top 10 by market cap
+                    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'UNH', 'JNJ',
+                    
+                    # Next 20 largest
+                    'XOM', 'JPM', 'V', 'WMT', 'PG', 'HD', 'CVX', 'MA', 'BAC', 'ABBV',
+                    'PFE', 'AVGO', 'KO', 'LLY', 'COST', 'PEP', 'MRK', 'TMO', 'DIS', 'ABT',
+                    
+                    # Tech & Growth (top 20)
+                    'NFLX', 'ADBE', 'CRM', 'ORCL', 'ACN', 'CSCO', 'TXN', 'QCOM', 'INTC', 'AMD',
+                    'IBM', 'NOW', 'UBER', 'PYPL', 'SHOP', 'SNOW', 'ZM', 'DOCU', 'OKTA', 'TWLO'
                 ]
                 logger.warning(f"Using fallback symbols ({len(fallback_symbols)} stocks): {fallback_symbols[:5]}...")
                 return fallback_symbols

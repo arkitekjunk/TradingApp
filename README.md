@@ -5,37 +5,40 @@ A production-ready real-time trading application that aggregates market data fro
 ## Features
 
 - **Real-time Data**: Live WebSocket streaming with gap-filling on reconnection and graceful shutdown
-- **Rate-Limited Backfill**: Quota-safe chunked backfill (500 calls/day, 60/min) with per-day slicing and incremental updates
+- **Hybrid Data Architecture**: Yahoo Finance for unlimited historical data + Finnhub for real-time streaming
+- **Multi-Timeframe Charts**: Interactive TradingView-style charts with 5m, 15m, 1h, 4h, 1d timeframe support
+- **Real-time Aggregation**: Dynamic timeframe conversion from 5-minute base data using pandas resample
+- **Rate-Limited Streaming**: Quota-safe WebSocket streaming (50 symbols on free plan) with connection monitoring
 - **Session-Aware VWAP**: Calendar-aware VWAP that resets at 9:30 AM ET with NYSE/NASDAQ holiday support
-- **EOD Reconciliation**: Daily alignment of live-built bars with official adjusted data for splits/dividends
 - **Storage Robustness**: Prevents data loss during symbol churn with proper deduplication and partial candle persistence
 - **Health & Metrics**: Comprehensive health monitoring with quota tracking and real-time status indicators
 - **Market Calendar**: Complete NYSE/NASDAQ holiday calendar (2024-2026) with early close detection
-- **Dynamic Universe**: Automatically fetches NASDAQ-100 (or custom index) constituents
-- **Professional UI**: TradingView-style charts with live quota display and status monitoring
+- **Dynamic Universe**: Automatically fetches top 50 symbols with fallback support
+- **Professional UI**: React-based trading interface with real-time charts, watchlist, and timeframe switching
 - **Alert System**: Discord and Telegram webhook notifications
 - **Extended Hours**: Optional pre-market (4:00-9:30 AM ET) and after-hours (4:00-8:00 PM ET) inclusion
-- **Comprehensive Testing**: Unit tests and integration tests for all major workflows
+- **Production Ready**: Comprehensive error handling, logging, and browser cache management
 
 ## Tech Stack
 
 ### Backend
 - **Python 3.11+** with FastAPI and uvicorn
-- **WebSocket**: `websocket-client` for Finnhub streaming with gap detection and recovery
-- **Data Processing**: pandas, pandas-ta for technical indicators
+- **Data Sources**: Yahoo Finance (yfinance) for historical data + Finnhub WebSocket for real-time
+- **Data Processing**: pandas with resample for timeframe aggregation, pandas-ta for technical indicators
 - **Storage**: Parquet files (pyarrow) + SQLite (SQLAlchemy) with robust deduplication
-- **Rate Limiting**: Token bucket algorithm with persistent SQLite tracking
+- **Rate Limiting**: WebSocket connection limits and streaming quota management
 - **Market Calendar**: `pytz` timezone handling with comprehensive NYSE/NASDAQ holidays
 - **Configuration**: python-dotenv, PyYAML with validation
 - **Logging**: loguru with structured, rotating logs
-- **Testing**: pytest with async support and comprehensive integration tests
+- **Browser Compatibility**: Cache-busting headers for seamless frontend updates
 
 ### Frontend
 - **React 18** with TypeScript and Vite
 - **Styling**: TailwindCSS for responsive design
-- **Charts**: Lightweight Charts (TradingView open-source)
+- **Charts**: Lightweight Charts (TradingView open-source) with multi-timeframe support
 - **Icons**: Lucide React
-- **Real-time Status**: Live quota display, last tick age, and comprehensive health monitoring
+- **Real-time Features**: Live WebSocket status, symbol watchlist, and dynamic timeframe switching
+- **Browser Optimization**: Cache-busting for seamless updates and /charts endpoint for reliable access
 
 ### Infrastructure
 - **Docker** with multi-stage builds
@@ -72,6 +75,7 @@ A production-ready real-time trading application that aggregates market data fro
    This starts:
    - Backend API at http://localhost:8000
    - Frontend dev server at http://localhost:3000
+   - Charts interface at http://localhost:3000/charts (bypass cache)
 
 ### Docker Deployment
 
@@ -164,9 +168,10 @@ reconciliation:
 ### Data Access
 
 - `GET /api/universe` - Get current universe symbols
-- `POST /api/universe/refresh` - Force refresh universe
-- `GET /api/candles?symbol=AAPL&tf=5m` - Get candle data
+- `POST /api/universe/refresh` - Force refresh universe  
+- `GET /api/candles?symbol=AAPL&tf=5m` - Get candle data (supports 5m, 15m, 1h, 4h, 1d)
 - `GET /api/signals` - Get recent trading signals
+- `GET /charts` - Serve charts interface with cache-busting headers
 
 ### Production Operations
 
@@ -179,14 +184,15 @@ reconciliation:
 
 ### Data Flow
 
-1. **Universe Management**: Fetches index constituents from Finnhub REST API with caching
-2. **Rate-Limited Backfill**: Chunked per-day processing with quota tracking and backfill queue management
-3. **Live Streaming**: WebSocket connection with gap detection, reconnection, and graceful shutdown
-4. **Session-Aware Processing**: VWAP and indicators reset at market session boundaries (9:30 AM ET)
-5. **Signal Processing**: Technical indicators calculated with session awareness and market calendar integration
-6. **EOD Reconciliation**: Daily comparison and alignment of live bars with official adjusted data
-7. **Alert Dispatch**: Webhooks sent to configured Discord/Telegram channels
-8. **Health Monitoring**: Real-time metrics collection and quota usage tracking
+1. **Universe Management**: Fetches top 50 symbols with fallback support when API quota exhausted
+2. **Historical Data**: Yahoo Finance provides unlimited 60-day 5-minute historical data
+3. **Real-time Streaming**: Finnhub WebSocket for live trade data (50 concurrent symbols on free plan)
+4. **Timeframe Aggregation**: Dynamic conversion from 5m base data to 15m, 1h, 4h, 1d using pandas resample
+5. **Session-Aware Processing**: VWAP and indicators reset at market session boundaries (9:30 AM ET)
+6. **Signal Processing**: Technical indicators calculated with session awareness and market calendar integration
+7. **Chart Interface**: Interactive TradingView-style charts with real-time timeframe switching
+8. **Alert Dispatch**: Webhooks sent to configured Discord/Telegram channels
+9. **Health Monitoring**: Real-time WebSocket status and connection monitoring
 
 ### Storage Schema
 

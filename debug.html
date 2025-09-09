@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chart Debug</title>
+    <style>
+        body { margin: 0; background: #1f2937; color: white; font-family: monospace; }
+        #debug { padding: 20px; }
+        #status { background: #374151; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .error { color: #ef4444; }
+        .success { color: #10b981; }
+    </style>
+</head>
+<body>
+    <div id="debug">
+        <h1>Trading App Debug</h1>
+        <div id="status">Loading...</div>
+        <div id="data"></div>
+    </div>
+
+    <script>
+        const statusDiv = document.getElementById('status');
+        const dataDiv = document.getElementById('data');
+
+        async function testAPI() {
+            try {
+                // Test health
+                statusDiv.innerHTML = 'Testing health endpoint...';
+                const healthResponse = await fetch('/healthz');
+                const healthData = await healthResponse.json();
+                
+                if (healthData.status === 'healthy') {
+                    statusDiv.innerHTML = '<span class="success">✓ Backend healthy</span>';
+                } else {
+                    statusDiv.innerHTML = '<span class="error">✗ Backend unhealthy</span>';
+                    return;
+                }
+
+                // Test universe
+                const universeResponse = await fetch('/api/universe');
+                const universeData = await universeResponse.json();
+                dataDiv.innerHTML = `<h3>Universe: ${universeData.symbols.length} symbols</h3>`;
+                
+                // Test candles
+                const candlesResponse = await fetch('/api/candles?symbol=AAPL&limit=5');
+                const candlesData = await candlesResponse.json();
+                
+                if (candlesData.candles && candlesData.candles.length > 0) {
+                    dataDiv.innerHTML += `<h3>AAPL Data: ${candlesData.candles.length} candles</h3>`;
+                    dataDiv.innerHTML += `<pre>${JSON.stringify(candlesData.candles[0], null, 2)}</pre>`;
+                    statusDiv.innerHTML += '<span class="success"> | ✓ API working</span>';
+                } else {
+                    statusDiv.innerHTML += '<span class="error"> | ✗ No chart data</span>';
+                }
+
+                // Load main app
+                statusDiv.innerHTML += '<br><br><a href="/" style="color: #3b82f6;">→ Go to Main App</a>';
+
+            } catch (error) {
+                statusDiv.innerHTML = `<span class="error">✗ Error: ${error.message}</span>`;
+                console.error('Debug error:', error);
+            }
+        }
+
+        testAPI();
+    </script>
+</body>
+</html>

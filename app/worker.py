@@ -17,6 +17,7 @@ from app.universe import universe_manager
 from app.indicators import signal_processor
 from app.rate_limiter import rate_limiter
 from app.market_calendar import market_calendar
+from app.yahoo_provider import yahoo_provider
 
 class CandleAggregator:
     """Aggregates trade ticks into OHLCV candles."""
@@ -184,7 +185,8 @@ class FinnhubWorker:
         self.api_key = db.get_setting("FINNHUB_API_KEY") or settings.finnhub_api_key
         
         if not self.api_key or self.api_key == "your_finnhub_api_key_here":
-            raise ValueError("Valid Finnhub API key is required. Please set it in the settings.")
+            logger.warning("Finnhub API key not configured. WebSocket streaming will be disabled. Historical data will work via Yahoo Finance.")
+            self.api_key = None
         
         # Graceful shutdown handling
         self.shutdown_requested = False
@@ -217,8 +219,11 @@ class FinnhubWorker:
             # 2. Start backfill process
             backfill_task = asyncio.create_task(self._backfill_data())
             
-            # 3. Start WebSocket connection
-            self._start_websocket()
+            # 3. Start WebSocket connection (only if API key is available)
+            if self.api_key:
+                self._start_websocket()
+            else:
+                logger.warning("Skipping WebSocket connection - no Finnhub API key configured")
             
             # Wait for backfill to complete
             await backfill_task
@@ -253,23 +258,10 @@ class FinnhubWorker:
         return {'status': 'success', 'message': 'Worker stopped'}
     
     async def _backfill_data(self):
-        """Backfill historical data with quota-aware scheduling."""
+        """Backfill historical data using Yahoo Finance (unlimited and free)."""
         try:
             include_extended_hours = db.get_setting('INCLUDE_EXTENDED_HOURS', 'false').lower() == 'true'
             lookback_days = min(int(db.get_setting('LOOKBACK_DAYS', '30')), settings.max_lookback_days)
-            
-            # Check rate limiter budget
-            rate_stats = rate_limiter.get_stats()
-            estimated_calls_needed = len(self.universe_symbols) * lookback_days  # Rough estimate
-            
-            if estimated_calls_needed > rate_stats.budget_remaining_today:
-                logger.warning(f"Estimated backfill needs {estimated_calls_needed} calls, "
-                             f"but only {rate_stats.budget_remaining_today} remaining today. "
-                             f"Scheduling symbols for future processing.")
-                             
-                # Schedule remaining symbols for future days
-                await self._schedule_backfill_queue()
-                return
             
             total_symbols = len(self.universe_symbols)
             self.stats['backfill_progress'] = {
@@ -278,7 +270,7 @@ class FinnhubWorker:
                 'status': 'running'
             }
             
-            logger.info(f"Starting quota-aware backfill for {total_symbols} symbols (lookback: {lookback_days} days)")
+            logger.info(f"Starting Yahoo Finance backfill for {total_symbols} symbols (lookback: {lookback_days} days)")
             
             async with httpx.AsyncClient(timeout=60.0) as client:
                 for i, symbol in enumerate(self.universe_symbols):
@@ -292,12 +284,11 @@ class FinnhubWorker:
                         
                     except Exception as e:
                         logger.error(f"Error backfilling {symbol}: {e}")
-                        # Add to backfill queue for retry
-                        db.add_to_backfill_queue(symbol, priority=1)
+                        # Continue with next symbol (Yahoo Finance is free, no quotas)
                         continue
             
             self.stats['backfill_progress']['status'] = 'completed'
-            logger.info("Backfill process completed")
+            logger.info("Yahoo Finance backfill process completed")
             
         except Exception as e:
             logger.error(f"Error in backfill process: {e}")
@@ -305,43 +296,53 @@ class FinnhubWorker:
     
     async def _backfill_symbol_chunked(self, client: httpx.AsyncClient, symbol: str, 
                                      lookback_days: int, include_extended_hours: bool):
-        """Backfill data for a single symbol using chunked per-day requests."""
+        """Backfill data for a single symbol using Yahoo Finance period-based approach."""
         try:
             # Check if we already have recent data
             last_timestamp = storage.get_last_timestamp(symbol, "5m")
-            end_time = datetime.now(timezone.utc)
             
             if last_timestamp:
-                # Incremental top-up: only fetch from last timestamp + 60s to now
-                start_time = last_timestamp + timedelta(seconds=60)
-                if (end_time - start_time).total_seconds() < 300:  # Less than 5 minutes
+                # If we have very recent data, skip full backfill
+                time_since_last = datetime.now(timezone.utc) - last_timestamp
+                if time_since_last.total_seconds() < 300:  # Less than 5 minutes
                     logger.debug(f"Skipping {symbol} - very recent data exists")
                     return
                     
-                logger.info(f"Incremental backfill for {symbol} from {start_time} to {end_time}")
+            logger.info(f"Full backfill for {symbol} - getting 60 days of 5-minute data from Yahoo Finance")
+            
+            # Single request for Yahoo Finance (gets up to 60 days of 5m data)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=60)  # Get full 60 days
+            
+            # Use Yahoo Finance directly with period-based approach
+            df = await yahoo_provider.get_historical_data(
+                symbol=symbol,
+                start_time=start_time,
+                end_time=end_time,
+                interval="5m"
+            )
+            
+            if df is None or df.empty:
+                logger.debug(f"No Yahoo Finance data for {symbol}")
+                return
                 
-                # Single request for incremental data
-                await self._fetch_and_store_chunk(client, symbol, start_time, end_time, include_extended_hours)
+            # Filter for extended hours if needed
+            if not include_extended_hours:
+                # Filter to regular market hours only
+                df = df[df['ts'].apply(lambda x: market_calendar.is_regular_hours(x))]
+            
+            if df.empty:
+                logger.debug(f"No market hours data for {symbol}")
+                return
                 
-            else:
-                # Full backfill using per-day chunks
-                start_time = end_time - timedelta(days=lookback_days)
-                logger.info(f"Full backfill for {symbol} from {start_time} to {end_time} ({lookback_days} days)")
-                
-                # Generate per-day slices
-                async for day_start, day_end in self._generate_day_slices(start_time, end_time):
-                    if not self.is_running or self.shutdown_requested:
-                        break
-                        
-                    await self._fetch_and_store_chunk(client, symbol, day_start, day_end, include_extended_hours)
-                    
-                    # Small delay between days to be API-friendly
-                    await asyncio.sleep(0.1)
+            # Store 5-minute candles
+            storage.write_candles(symbol, "5m", df)
+            logger.info(f"Stored {len(df)} 5m candles for {symbol} from Yahoo Finance")
                     
             logger.debug(f"Completed backfill for {symbol}")
             
         except Exception as e:
-            logger.error(f"Error in chunked backfill for {symbol}: {e}")
+            logger.error(f"Error in backfill for {symbol}: {e}")
             raise
     
     async def _generate_day_slices(self, start_time: datetime, end_time: datetime):
@@ -360,81 +361,44 @@ class FinnhubWorker:
     async def _fetch_and_store_chunk(self, client: httpx.AsyncClient, symbol: str,
                                    chunk_start: datetime, chunk_end: datetime,
                                    include_extended_hours: bool):
-        """Fetch and store a single time chunk with rate limiting and retry logic."""
-        max_retries = 3
-        
-        for attempt in range(max_retries):
-            try:
-                # Acquire rate limit permission
-                await rate_limiter.acquire_with_backoff()
+        """Fetch and store historical data using Yahoo Finance (free unlimited) for historical data."""
+        try:
+            logger.info(f"Fetching historical data for {symbol} from Yahoo Finance")
+            
+            # Use Yahoo Finance for historical data (completely free and unlimited)
+            # Try multiple intervals to get the best data availability
+            df = None
+            
+            # Yahoo Finance provides up to 60 days of 5-minute data with correct period call
+            df = await yahoo_provider.get_historical_data(
+                symbol=symbol,
+                start_time=chunk_start,
+                end_time=chunk_end,
+                interval="5m"  # Get full 60 days of 5-minute data
+            )
+            
+            if df is None or df.empty:
+                logger.debug(f"No Yahoo Finance data for {symbol} in chunk {chunk_start} to {chunk_end}")
+                return
                 
-                # Call Finnhub stock/candle API
-                url = "https://finnhub.io/api/v1/stock/candle"
-                params = {
-                    'symbol': symbol,
-                    'resolution': '1',  # 1-minute resolution for accuracy
-                    'from': int(chunk_start.timestamp()),
-                    'to': int(chunk_end.timestamp()),
-                    'token': self.api_key,
-                    'adjusted': 'true'  # Ensure split/dividend adjustments
-                }
+            # Filter for extended hours if needed
+            if not include_extended_hours:
+                # Filter to regular market hours only
+                df = df[df['ts'].apply(lambda x: market_calendar.is_regular_hours(x))]
+            
+            if df.empty:
+                logger.debug(f"No market hours data for {symbol}")
+                return
                 
-                response = await client.get(url, params=params)
+            # Store 5-minute candles for historical data
+            storage.write_candles(symbol, "5m", df)
+            logger.info(f"Stored {len(df)} 5m candles for {symbol} from Yahoo Finance")
                 
-                if response.status_code == 429:
-                    # Rate limit hit - exponential backoff
-                    backoff_delay = (2 ** attempt) + random.uniform(0, 2)
-                    logger.warning(f"Rate limited for {symbol}, attempt {attempt + 1}, waiting {backoff_delay:.1f}s")
-                    await asyncio.sleep(backoff_delay)
-                    continue
-                    
-                response.raise_for_status()
-                data = response.json()
-                
-                if data.get('s') != 'ok':
-                    logger.debug(f"No data for {symbol} in chunk {chunk_start} to {chunk_end}: {data}")
-                    return
-                
-                # Convert to DataFrame
-                df = pd.DataFrame({
-                    'ts': pd.to_datetime(data['t'], unit='s', utc=True),
-                    'o': data['o'],
-                    'h': data['h'],
-                    'l': data['l'],
-                    'c': data['c'],
-                    'v': data['v']
-                })
-                
-                if df.empty:
-                    return
-                
-                # Filter for extended hours if needed
-                if not include_extended_hours:
-                    df = df[df['ts'].apply(lambda x: market_calendar.is_regular_hours(x))]
-                
-                if df.empty:
-                    return
-                
-                # Resample 1-minute to 5-minute bars with proper alignment
-                df_5m = self._resample_to_5min_aligned(df)
-                
-                # Store 5-minute candles
-                if not df_5m.empty:
-                    storage.write_candles(symbol, "5m", df_5m)
-                    logger.debug(f"Stored {len(df_5m)} 5m candles for {symbol} (chunk: {chunk_start.date()})")
-                
-                return  # Success, exit retry loop
-                
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed to fetch chunk for {symbol} after {max_retries} attempts: {e}")
-                    raise
-                else:
-                    backoff_delay = (2 ** attempt) + random.uniform(0, 1)
-                    logger.warning(f"Error fetching chunk for {symbol}, attempt {attempt + 1}, retrying in {backoff_delay:.1f}s: {e}")
-                    await asyncio.sleep(backoff_delay)
+        except Exception as e:
+            logger.error(f"Error fetching Yahoo Finance data for {symbol}: {e}")
+            raise
     
-    async def _schedule_backfill_queue(self):
+    async def _schedule_backfill_queue(self, symbols_to_queue: List[str]):
         """Schedule symbols that couldn't be processed today into backfill queue."""
         try:
             rate_stats = rate_limiter.get_stats()
@@ -446,9 +410,9 @@ class FinnhubWorker:
             ) + timedelta(days=1)
             
             scheduled_count = 0
-            for i, symbol in enumerate(self.universe_symbols[symbols_per_day:]):
+            for i, symbol in enumerate(symbols_to_queue):
                 # Spread symbols across multiple days
-                days_offset = i // symbols_per_day
+                days_offset = i // symbols_per_day if symbols_per_day > 0 else i
                 scheduled_for = tomorrow + timedelta(days=days_offset)
                 
                 db.add_to_backfill_queue(symbol, priority=0, scheduled_for=scheduled_for)

@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import type { HealthStatus } from './lib/api';
+import { Chart } from './components/Chart';
+import { Watchlist } from './components/Watchlist';
 
 function App() {
+  console.log('🔥 Trading App v2.0 - Chart Interface Loading...');
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [settings, setSettings] = useState({
     finnhub_api_key: '',
@@ -10,6 +13,10 @@ function App() {
   });
   const [isRunning, setIsRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('AAPL');
+  const [selectedTimeframe, setSelectedTimeframe] = useState<string>('5m');
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [symbols, setSymbols] = useState<string[]>([]);
 
   // Fetch health status
   const fetchHealth = async () => {
@@ -77,25 +84,33 @@ function App() {
     }
   };
 
-  // Load initial settings
+  // Load initial data
   useEffect(() => {
-    const loadSettings = async () => {
+    const loadInitialData = async () => {
       try {
-        const response = await fetch('/api/settings');
-        const data = await response.json();
-        if (data.settings) {
+        // Load settings
+        const settingsResponse = await fetch('/api/settings');
+        const settingsData = await settingsResponse.json();
+        if (settingsData.settings) {
           setSettings({
-            finnhub_api_key: data.settings.FINNHUB_API_KEY || '',
-            lookback_days: parseInt(data.settings.LOOKBACK_DAYS) || 30,
-            discord_webhook_url: data.settings.DISCORD_WEBHOOK_URL || ''
+            finnhub_api_key: settingsData.settings.FINNHUB_API_KEY || '',
+            lookback_days: parseInt(settingsData.settings.LOOKBACK_DAYS) || 30,
+            discord_webhook_url: settingsData.settings.DISCORD_WEBHOOK_URL || ''
           });
         }
+
+        // Load universe symbols
+        const universeResponse = await fetch('/api/universe');
+        const universeData = await universeResponse.json();
+        if (universeData.symbols) {
+          setSymbols(universeData.symbols);
+        }
       } catch (error) {
-        console.error('Failed to load settings:', error);
+        console.error('Failed to load initial data:', error);
       }
     };
 
-    loadSettings();
+    loadInitialData();
     fetchHealth();
     
     // Poll health every 5 seconds
@@ -103,46 +118,53 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  return (
-    <div className="min-h-screen bg-gray-900 text-white p-4">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="bg-gray-800 rounded-lg p-4 mb-4 flex justify-between items-center">
-          <div className="flex items-center space-x-4">
-            <h1 className="text-2xl font-bold">Trading App</h1>
-            <div className="flex items-center space-x-2">
-              <div className={`w-3 h-3 rounded-full ${
-                health?.worker?.ws_connected ? 'bg-green-500' : 'bg-red-500'
-              }`}></div>
-              <span>{health?.worker?.ws_connected ? 'Connected' : 'Disconnected'}</span>
+  if (showDashboard) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4">
+        <div className="max-w-6xl mx-auto">
+          {/* Header */}
+          <div className="bg-gray-800 rounded-lg p-4 mb-4 flex justify-between items-center">
+            <div className="flex items-center space-x-4">
+              <h1 className="text-2xl font-bold">Trading App</h1>
+              <div className="flex items-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${
+                  health?.worker?.ws_connected ? 'bg-green-500' : 'bg-red-500'
+                }`}></div>
+                <span>{health?.worker?.ws_connected ? 'Connected' : 'Disconnected'}</span>
+              </div>
+            </div>
+            
+            <div className="space-x-2">
+              <button
+                onClick={() => setShowDashboard(false)}
+                className="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded"
+              >
+                Charts
+              </button>
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded"
+              >
+                Settings
+              </button>
+              
+              {!isRunning ? (
+                <button
+                  onClick={startWorker}
+                  className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded"
+                >
+                  Start
+                </button>
+              ) : (
+                <button
+                  onClick={stopWorker}
+                  className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded"
+                >
+                  Stop
+                </button>
+              )}
             </div>
           </div>
-          
-          <div className="space-x-2">
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded"
-            >
-              Settings
-            </button>
-            
-            {!isRunning ? (
-              <button
-                onClick={startWorker}
-                className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded"
-              >
-                Start
-              </button>
-            ) : (
-              <button
-                onClick={stopWorker}
-                className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded"
-              >
-                Stop
-              </button>
-            )}
-          </div>
-        </div>
 
         {/* Settings Panel */}
         {showSettings && (
@@ -326,6 +348,152 @@ function App() {
           >
             View API Documentation
           </a>
+        </div>
+      </div>
+    </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white">
+      {/* Simple Status Bar */}
+      <div className="bg-gray-800 p-4 flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <h1 className="text-xl font-bold">🚀 TRADING CHARTS v2.0 - NEW INTERFACE! 🚀</h1>
+          <div className="flex items-center space-x-2">
+            <div className={`w-3 h-3 rounded-full ${
+              health?.worker?.ws_connected ? 'bg-green-500' : 'bg-red-500'
+            }`}></div>
+            <span>{health?.worker?.ws_connected ? 'Connected' : 'Disconnected'}</span>
+          </div>
+          <div className="text-sm text-gray-300">
+            Symbols: {symbols.length} | Worker: {isRunning ? 'Running' : 'Stopped'}
+          </div>
+        </div>
+        
+        <div className="space-x-2">
+          <button
+            onClick={() => setShowDashboard(true)}
+            className="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded text-sm"
+          >
+            Dashboard
+          </button>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm"
+          >
+            Settings
+          </button>
+          
+          {!isRunning ? (
+            <button
+              onClick={startWorker}
+              className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-sm"
+            >
+              Start
+            </button>
+          ) : (
+            <button
+              onClick={stopWorker}
+              className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm"
+            >
+              Stop
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="bg-gray-800 p-6 mb-4 mx-4">
+          <h2 className="text-xl font-bold mb-4">Settings</h2>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Finnhub API Key *
+              </label>
+              <input
+                type="password"
+                value={settings.finnhub_api_key}
+                onChange={(e) => setSettings({...settings, finnhub_api_key: e.target.value})}
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                placeholder="Enter your Finnhub API key"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Lookback Days
+              </label>
+              <input
+                type="number"
+                value={settings.lookback_days}
+                onChange={(e) => setSettings({...settings, lookback_days: parseInt(e.target.value) || 30})}
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Discord Webhook URL (Optional)
+              </label>
+              <input
+                type="url"
+                value={settings.discord_webhook_url}
+                onChange={(e) => setSettings({...settings, discord_webhook_url: e.target.value})}
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                placeholder="https://discord.com/api/webhooks/..."
+              />
+            </div>
+            
+            <button
+              onClick={saveSettings}
+              className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded"
+            >
+              Save Settings
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Trading Interface */}
+      <div className="flex h-screen">
+        {/* Left Sidebar - Watchlist */}
+        <div className="w-80 p-4">
+          <Watchlist 
+            symbols={symbols}
+            selectedSymbol={selectedSymbol}
+            onSymbolSelect={setSelectedSymbol}
+          />
+
+          {/* Timeframe Selector */}
+          <div className="bg-gray-800 rounded-lg p-4 mt-4">
+            <h3 className="text-sm font-semibold mb-3">Timeframe</h3>
+            <div className="grid grid-cols-3 gap-2">
+              {['5m', '15m', '1h', '4h', '1d'].map((tf) => (
+                <button
+                  key={tf}
+                  onClick={() => setSelectedTimeframe(tf)}
+                  className={`px-3 py-2 text-sm rounded ${
+                    selectedTimeframe === tf 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  }`}
+                >
+                  {tf.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Main Chart Area */}
+        <div className="flex-1 p-4">
+          <Chart 
+            symbol={selectedSymbol}
+            timeframe={selectedTimeframe}
+          />
         </div>
       </div>
     </div>

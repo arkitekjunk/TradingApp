@@ -19,6 +19,56 @@ from app.alerts import alert_manager
 from app.reconciliation import reconciliation_service
 from app.rate_limiter import rate_limiter
 
+def aggregate_timeframe(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+    """Aggregate 5m data to higher timeframes."""
+    if df.empty:
+        return df
+    
+    logger.info(f"Aggregating {len(df)} bars to {tf}")
+    logger.info(f"DataFrame columns: {list(df.columns)}")
+    logger.info(f"Index type: {type(df.index)}")
+    
+    # DataFrame already has timestamp as index from storage.read_candles()
+    
+    # Map timeframes to pandas frequency strings
+    tf_map = {
+        '15m': '15T',
+        '30m': '30T', 
+        '1h': '1H',
+        '4h': '4H',
+        '1d': '1D'
+    }
+    
+    if tf not in tf_map:
+        return df.reset_index()
+    
+    freq = tf_map[tf]
+    
+    # Aggregate OHLCV data
+    agg_dict = {
+        'o': 'first',
+        'h': 'max',
+        'l': 'min', 
+        'c': 'last',
+        'v': 'sum'
+    }
+    
+    # Add any indicator columns that exist
+    for col in df.columns:
+        if col not in agg_dict:
+            if col.startswith(('ema_', 'sma_', 'rsi', 'bb_', 'vwap', 'atr')):
+                agg_dict[col] = 'last'  # Use last value for indicators
+            elif col in ['rvol']:
+                agg_dict[col] = 'mean'  # Average for volume-based indicators
+    
+    # Resample and aggregate
+    df_agg = df.resample(freq).agg(agg_dict).dropna()
+    
+    # Reset index to get timestamp back as column
+    df_agg = df_agg.reset_index()
+    
+    return df_agg
+
 # Pydantic models for request/response
 class SettingsRequest(BaseModel):
     finnhub_api_key: Optional[str] = None
@@ -70,7 +120,7 @@ async def serve_app():
     """Serve the React application."""
     static_index = Path("static/index.html")
     if static_index.exists():
-        return FileResponse(static_index)
+        return FileResponse(static_index, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     else:
         return HTMLResponse("""
         <html>
@@ -85,6 +135,19 @@ async def serve_app():
             </body>
         </html>
         """)
+
+@app.get("/charts")
+async def serve_charts():
+    """Serve the new charts interface with cache-busting."""
+    static_index = Path("static/index.html")
+    if static_index.exists():
+        return FileResponse(static_index, headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache", 
+            "Expires": "0"
+        })
+    else:
+        return HTMLResponse("Charts interface not built yet.")
 
 @app.get("/api/settings")
 async def get_settings():
@@ -281,8 +344,16 @@ async def get_candles(
         if to_time:
             end_time = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
         
-        # Read candles from storage
-        df = storage.read_candles(symbol, tf, start_time, end_time)
+        # Read candles from storage - always get 5m data first
+        base_tf = "5m"
+        df = storage.read_candles(symbol, base_tf, start_time, end_time)
+        
+        logger.info(f"Read {len(df)} candles for {symbol} from storage")
+        if not df.empty:
+            logger.info(f"DataFrame index type: {type(df.index)}")
+            logger.info(f"DataFrame columns: {list(df.columns)}")
+            logger.info(f"Index name: {df.index.name}")
+            logger.info(f"First few timestamps: {df.index[:3].tolist()}")
         
         if df.empty:
             return {
@@ -292,18 +363,38 @@ async def get_candles(
                 "count": 0
             }
         
+        # For 5m timeframe, we need to reset index to convert timestamp index to column
+        if tf == "5m":
+            df = df.reset_index()
+            # Rename the timestamp column to a consistent name
+            if df.index.name == 'ts' or 'ts' in df.columns:
+                pass  # Already has ts column
+            else:
+                df = df.rename(columns={df.columns[0]: 'ts'})  # First column should be timestamp
+        
+        # Aggregate to requested timeframe if not 5m
+        if tf != "5m":
+            df = aggregate_timeframe(df, tf)
+        
+        # Ensure we have a ts column for consistency
+        if 'ts' not in df.columns and len(df.columns) > 0:
+            # If first column looks like timestamp, rename it
+            first_col = df.columns[0]
+            if 'time' in first_col.lower() or first_col == df.index.name:
+                df = df.rename(columns={first_col: 'ts'})
+        
         # Apply limit
         if limit and len(df) > limit:
             df = df.tail(limit)
         
-        # Calculate indicators
+        # Calculate indicators (this expects DataFrame with ts column, not index)
         df_with_indicators = signal_processor.indicator_calc.calculate_indicators(df)
         
         # Convert to list of records
         candles = []
-        for timestamp, row in df_with_indicators.iterrows():
+        for _, row in df_with_indicators.iterrows():
             candle = {
-                "time": int(timestamp.timestamp()),
+                "time": int(pd.to_datetime(row['ts']).timestamp()),
                 "open": float(row['o']),
                 "high": float(row['h']),
                 "low": float(row['l']),
