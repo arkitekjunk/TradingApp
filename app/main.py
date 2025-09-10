@@ -9,8 +9,8 @@ import asyncio
 import pandas as pd
 from pathlib import Path
 
-from app.config import settings, validate_settings
-from app.logging import logger
+from app.config import settings, validate_settings_for_streaming
+from app.log_config import logger
 from app.data_access import db, storage
 from app.universe import universe_manager
 from app.worker import worker
@@ -18,6 +18,7 @@ from app.indicators import signal_processor
 from app.alerts import alert_manager
 from app.reconciliation import reconciliation_service
 from app.rate_limiter import rate_limiter
+from app.yahoo_provider import yahoo_provider
 
 def aggregate_timeframe(df: pd.DataFrame, tf: str) -> pd.DataFrame:
     """Aggregate 5m data to higher timeframes."""
@@ -34,7 +35,7 @@ def aggregate_timeframe(df: pd.DataFrame, tf: str) -> pd.DataFrame:
     tf_map = {
         '15m': '15T',
         '30m': '30T', 
-        '1h': '1H',
+        '1h': '1h',
         '4h': '4H',
         '1d': '1D'
     }
@@ -92,6 +93,13 @@ class SignalQuery(BaseModel):
     tf: Optional[str] = None
     limit: Optional[int] = 100
 
+class SignalRules(BaseModel):
+    # Simple rules structure that mirrors indicators-based long trigger
+    ema_cross_above: Optional[bool] = True
+    rsi_min: Optional[int] = 50
+    price_above_vwap: Optional[bool] = True
+    min_rvol: Optional[float] = 2.0
+
 # Create FastAPI app
 app = FastAPI(
     title="Trading App API",
@@ -120,7 +128,11 @@ async def serve_app():
     """Serve the React application."""
     static_index = Path("static/index.html")
     if static_index.exists():
-        return FileResponse(static_index, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+        return FileResponse(static_index, headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
     else:
         return HTMLResponse("""
         <html>
@@ -154,6 +166,20 @@ async def get_settings():
     """Get current settings."""
     try:
         settings_dict = db.get_all_settings()
+
+        # Backfill API key from environment if missing in DB
+        try:
+            if not settings_dict.get("FINNHUB_API_KEY") and settings.finnhub_api_key:
+                settings_dict["FINNHUB_API_KEY"] = settings.finnhub_api_key
+        except Exception:
+            pass
+
+        # Ensure INCLUDE_EXTENDED_HOURS key exists (stringified boolean)
+        try:
+            if "INCLUDE_EXTENDED_HOURS" not in settings_dict:
+                settings_dict["INCLUDE_EXTENDED_HOURS"] = str(bool(getattr(settings, "include_extended_hours", False))).lower()
+        except Exception:
+            pass
         
         # Add universe cache info
         universe_info = universe_manager.get_cache_info()
@@ -213,15 +239,6 @@ async def update_settings(request: SettingsRequest):
             db.set_setting("INCLUDE_EXTENDED_HOURS", str(request.include_extended_hours).lower())
             updated_keys.append("INCLUDE_EXTENDED_HOURS")
         
-        # Validate settings after update
-        if request.lookback_days is not None:
-            lookback_days = request.lookback_days
-            if lookback_days > settings.max_lookback_days and not settings.enable_backlog_scheduling:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Lookback days cannot exceed {settings.max_lookback_days} unless backlog scheduling is enabled"
-                )
-        
         logger.info(f"Updated settings: {updated_keys}")
         
         return {
@@ -238,15 +255,20 @@ async def update_settings(request: SettingsRequest):
 async def start_worker(background_tasks: BackgroundTasks):
     """Start the trading worker (backfill + streaming)."""
     try:
-        # Validate that we have an API key
-        api_key = db.get_setting("FINNHUB_API_KEY")
-        if not api_key:
-            raise HTTPException(
-                status_code=400, 
-                detail="FINNHUB_API_KEY is required. Please configure it in settings."
-            )
+        # Validate that we have an API key for streaming
+        try:
+            validate_settings_for_streaming(settings)
+        except Exception:
+            # Also attempt pulling from DB settings
+            api_key = db.get_setting("FINNHUB_API_KEY")
+            if not api_key:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="FINNHUB_API_KEY is required. Please configure it in settings."
+                )
         
         # Update worker's API key
+        api_key = db.get_setting("FINNHUB_API_KEY") or settings.finnhub_api_key
         worker.api_key = api_key
         
         # Set API key for reconciliation service
@@ -324,6 +346,36 @@ async def refresh_universe():
         logger.error(f"Error refreshing universe: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/market-cap/{symbol}")
+async def get_market_cap(symbol: str):
+    """Get market capitalization for a symbol."""
+    try:
+        market_cap = await yahoo_provider.get_market_cap(symbol.upper())
+        if market_cap is None:
+            raise HTTPException(status_code=404, detail=f"Market cap not available for {symbol}")
+        
+        # Format market cap for display
+        if market_cap >= 1_000_000_000_000:  # Trillion
+            formatted = f"${market_cap / 1_000_000_000_000:.1f}T"
+        elif market_cap >= 1_000_000_000:  # Billion
+            formatted = f"${market_cap / 1_000_000_000:.1f}B"
+        elif market_cap >= 1_000_000:  # Million
+            formatted = f"${market_cap / 1_000_000:.1f}M"
+        else:
+            formatted = f"${market_cap:,.0f}"
+        
+        return {
+            "symbol": symbol.upper(),
+            "market_cap": market_cap,
+            "formatted": formatted
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting market cap for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/candles")
 async def get_candles(
     symbol: str,
@@ -363,36 +415,35 @@ async def get_candles(
                 "count": 0
             }
         
-        # For 5m timeframe, we need to reset index to convert timestamp index to column
+        # For 5m timeframe, keep index as ts; for others, aggregate later
         if tf == "5m":
-            df = df.reset_index()
-            # Rename the timestamp column to a consistent name
-            if df.index.name == 'ts' or 'ts' in df.columns:
-                pass  # Already has ts column
-            else:
-                df = df.rename(columns={df.columns[0]: 'ts'})  # First column should be timestamp
-        
-        # Aggregate to requested timeframe if not 5m
-        if tf != "5m":
+            # Ensure timezone-aware and named index
+            if df.index.tz is None:
+                df.index = pd.to_datetime(df.index, utc=True)
+            df.index.name = 'ts'
+        else:
+            # For aggregation, make sure index is tz-aware and named
+            if df.index.tz is None:
+                df.index = pd.to_datetime(df.index, utc=True)
+            df.index.name = 'ts'
             df = aggregate_timeframe(df, tf)
+            # After aggregation, set index back to ts
+            if 'ts' in df.columns:
+                df['ts'] = pd.to_datetime(df['ts'], utc=True)
+                df = df.set_index('ts').sort_index()
         
-        # Ensure we have a ts column for consistency
-        if 'ts' not in df.columns and len(df.columns) > 0:
-            # If first column looks like timestamp, rename it
-            first_col = df.columns[0]
-            if 'time' in first_col.lower() or first_col == df.index.name:
-                df = df.rename(columns={first_col: 'ts'})
-        
-        # Apply limit
-        if limit and len(df) > limit:
-            df = df.tail(limit)
-        
-        # Calculate indicators (this expects DataFrame with ts column, not index)
+        # Calculate indicators on DataFrame with timestamp index
         df_with_indicators = signal_processor.indicator_calc.calculate_indicators(df)
         
-        # Convert to list of records
-        candles = []
-        for _, row in df_with_indicators.iterrows():
+        # Prepare response: ensure ts as column for iteration
+        df_resp = df_with_indicators.reset_index()
+        
+        # Apply limit (take most recent N)
+        if limit and len(df_resp) > limit:
+            df_resp = df_resp.tail(limit)
+        
+        candles: List[Dict[str, Any]] = []
+        for _, row in df_resp.iterrows():
             candle = {
                 "time": int(pd.to_datetime(row['ts']).timestamp()),
                 "open": float(row['o']),
@@ -467,6 +518,39 @@ async def resend_signal_alert(signal_id: int, background_tasks: BackgroundTasks)
         raise
     except Exception as e:
         logger.error(f"Error resending alert: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/rules")
+async def get_rules():
+    """Get current signal rules (from DB or defaults)."""
+    try:
+        raw_rules = db.get_setting("SIGNAL_RULES_JSON")
+        if raw_rules:
+            import json
+            rules = json.loads(raw_rules)
+        else:
+            # Defaults mirror current SignalProcessor defaults
+            rules = {
+                "ema_cross_above": True,
+                "rsi_min": 50,
+                "price_above_vwap": True,
+                "min_rvol": 2.0
+            }
+        return {"rules": rules}
+    except Exception as e:
+        logger.error(f"Error getting rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/rules")
+async def update_rules(rules: SignalRules):
+    """Update signal rules (stored in DB settings)."""
+    try:
+        import json
+        payload = {k: v for k, v in rules.dict().items() if v is not None}
+        db.set_setting("SIGNAL_RULES_JSON", json.dumps(payload))
+        return {"status": "success", "message": "Rules updated"}
+    except Exception as e:
+        logger.error(f"Error updating rules: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/healthz")
@@ -559,11 +643,10 @@ async def get_stats():
 async def startup_event():
     """Application startup tasks."""
     try:
-        # Validate configuration
-        validate_settings(settings)
-        logger.info("Settings validation passed")
+        # Do not hard fail without API key; allow historical-only mode
+        logger.info("Startup: historical-only mode available unless streaming started")
         
-        # Initialize reconciliation service
+        # Initialize reconciliation service API key from DB if present
         api_key = db.get_setting("FINNHUB_API_KEY")
         if api_key:
             reconciliation_service.set_api_key(api_key)
@@ -578,6 +661,17 @@ async def startup_event():
 async def run_reconciliation():
     """Manually trigger reconciliation for the previous session."""
     try:
+        # Validate API key for reconciliation
+        try:
+            validate_settings_for_streaming(settings)
+        except Exception:
+            api_key = db.get_setting("FINNHUB_API_KEY")
+            if not api_key:
+                return {
+                    "status": "error",
+                    "message": "FINNHUB_API_KEY is required for reconciliation"
+                }
+        
         # Get current universe symbols
         symbols = await universe_manager.get_universe_symbols()
         

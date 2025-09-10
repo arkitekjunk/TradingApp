@@ -6,7 +6,7 @@ A production-ready real-time trading application that aggregates market data fro
 
 - **Real-time Data**: Live WebSocket streaming with gap-filling on reconnection and graceful shutdown
 - **Hybrid Data Architecture**: Yahoo Finance for unlimited historical data + Finnhub for real-time streaming
-- **Multi-Timeframe Charts**: Interactive TradingView-style charts with 5m, 15m, 1h, 4h, 1d timeframe support
+- **Multi-Timeframe Charts**: Interactive TradingView-style charts with dual chart modes (Candlestick & Line) and 5m, 15m, 1h, 4h, 1d timeframe support
 - **Real-time Aggregation**: Dynamic timeframe conversion from 5-minute base data using pandas resample
 - **Rate-Limited Streaming**: Quota-safe WebSocket streaming (50 symbols on free plan) with connection monitoring
 - **Session-Aware VWAP**: Calendar-aware VWAP that resets at 9:30 AM ET with NYSE/NASDAQ holiday support
@@ -35,7 +35,7 @@ A production-ready real-time trading application that aggregates market data fro
 ### Frontend
 - **React 18** with TypeScript and Vite
 - **Styling**: TailwindCSS for responsive design
-- **Charts**: Lightweight Charts (TradingView open-source) with multi-timeframe support
+- **Charts**: Lightweight Charts (TradingView open-source) with dual visualization modes (candlestick/line charts) and multi-timeframe support
 - **Icons**: Lucide React
 - **Real-time Features**: Live WebSocket status, symbol watchlist, and dynamic timeframe switching
 - **Browser Optimization**: Cache-busting for seamless updates and /charts endpoint for reliable access

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { BarChart3, RefreshCw, AlertCircle } from 'lucide-react';
-import { TradingChart } from '../lib/charts';
+import { BarChart3, RefreshCw, AlertCircle, ZoomIn, ZoomOut, TrendingUp } from 'lucide-react';
+import { TradingChart, LineChart } from '../lib/charts';
 import { api } from '../lib/api';
 
 interface ChartProps {
@@ -8,31 +8,89 @@ interface ChartProps {
   timeframe: string;
 }
 
+type ChartType = 'candlestick' | 'line';
+
 export function Chart({ symbol, timeframe }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<TradingChart | null>(null);
+  const chartRef = useRef<TradingChart | LineChart | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [chartType, setChartType] = useState<ChartType>('candlestick');
 
   // Initialize chart
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Clean up existing chart
-    if (chartRef.current) {
-      chartRef.current.destroy();
-    }
+    const container = containerRef.current;
+    let mounted = true;
 
-    // Create new chart
-    chartRef.current = new TradingChart(containerRef.current);
+    const initChart = async () => {
+      try {
+        console.log('Chart: Initializing chart type:', chartType);
+        
+        // Clean up existing chart first
+        if (chartRef.current) {
+          console.log('Chart: Destroying existing chart');
+          try {
+            chartRef.current.destroy();
+          } catch (destroyError) {
+            console.warn('Chart: Error destroying previous chart:', destroyError);
+          }
+          chartRef.current = null;
+        }
 
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy();
+        // Small delay to ensure cleanup is complete
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        if (!mounted || !container) return;
+
+        if (chartType === 'candlestick') {
+          console.log('Chart: Creating TradingChart');
+          chartRef.current = new TradingChart(container);
+        } else {
+          console.log('Chart: Creating LineChart');
+          chartRef.current = new LineChart(container);
+        }
+        
+        if (!mounted || !chartRef.current) return;
+        
+        // Default interactions: wheel zoom and drag pan enabled
+        chartRef.current.setInteractionOptions({ wheelZoom: true, dragPan: true });
+        // Persist zoom per symbol+timeframe+chartType
+        chartRef.current.setZoomPersistenceKey(`${symbol}:${timeframe}:${chartType}`);
+        
+        console.log('Chart: Chart initialization completed');
+      } catch (error) {
+        console.error('Chart: Failed to initialize chart:', error);
+        if (mounted) {
+          setError(`Failed to initialize chart: ${error}`);
+        }
       }
     };
-  }, []);
+
+    initChart();
+
+    return () => { 
+      mounted = false;
+      if (chartRef.current) {
+        try {
+          chartRef.current.destroy();
+        } catch (error) {
+          console.warn('Chart: Error destroying chart:', error);
+        }
+        chartRef.current = null;
+      }
+    };
+  }, [chartType]);
+
+  // Update persistence key and interaction when symbol/timeframe changes
+  useEffect(() => {
+    if (chartRef.current) {
+      chartRef.current.setInteractionOptions({ wheelZoom: true, dragPan: true });
+      chartRef.current.setZoomPersistenceKey(`${symbol}:${timeframe}:${chartType}`);
+    }
+  }, [symbol, timeframe, chartType]);
 
   // Handle resize
   useEffect(() => {
@@ -57,11 +115,7 @@ export function Chart({ symbol, timeframe }: ChartProps) {
   // Auto-refresh data
   useEffect(() => {
     if (!symbol) return;
-
-    const interval = setInterval(() => {
-      loadChartData(true); // Silent refresh
-    }, 15000); // Update every 15 seconds
-
+    const interval = setInterval(() => { loadChartData(true); }, 15000);
     return () => clearInterval(interval);
   }, [symbol, timeframe]);
 
@@ -69,88 +123,55 @@ export function Chart({ symbol, timeframe }: ChartProps) {
     if (!symbol || !chartRef.current) return;
 
     try {
-      if (!silent) {
-        setLoading(true);
-        setError('');
-      }
+      if (!silent) { setLoading(true); setError(''); }
 
-      // Calculate date range based on timeframe
       const now = new Date();
       const from = new Date();
-      
-      // Adjust lookback based on timeframe
       switch (timeframe) {
-        case '5m':
-          from.setDate(now.getDate() - 7); // 7 days for 5m
-          break;
-        case '15m':
-          from.setDate(now.getDate() - 14); // 2 weeks for 15m
-          break;
-        case '1h':
-          from.setMonth(now.getMonth() - 1); // 1 month for 1h
-          break;
-        case '4h':
-          from.setMonth(now.getMonth() - 3); // 3 months for 4h
-          break;
-        case '1d':
-          from.setFullYear(now.getFullYear() - 1); // 1 year for 1d
+        case '5m': case '15m': case '1h': case '4h': case '1d':
+          from.setDate(now.getDate() - 60);
           break;
         default:
-          from.setDate(now.getDate() - 7);
+          from.setDate(now.getDate() - 60);
       }
 
-      const response = await api.getCandles({
-        symbol,
-        tf: timeframe,
-        from_time: from.toISOString(),
-        to_time: now.toISOString(),
-        limit: 1000
-      });
+      const response = await api.getCandles({ symbol, tf: timeframe, from_time: from.toISOString(), to_time: now.toISOString(), limit: 10000 });
 
-      if (response.candles.length === 0) {
-        setError(`No data available for ${symbol}`);
-        return;
-      }
+      if (response.candles.length === 0) { setError(`No data available for ${symbol}`); return; }
 
-      // Update chart with data
       chartRef.current.updateData(response.candles);
       setLastUpdate(new Date());
 
-      // Load and add signal markers
+      // Signals
       try {
-        const signalsResponse = await api.getSignals({
-          symbol,
-          tf: timeframe,
-          limit: 20
-        });
-
-        // Add signal markers to chart
-        signalsResponse.signals.forEach(signal => {
-          const signalTime = Math.floor(new Date(signal.ts).getTime() / 1000);
-          chartRef.current?.addSignalMarker(
-            signalTime,
-            signal.details.price,
-            `LONG @ $${signal.details.price.toFixed(2)}`
-          );
-        });
-      } catch (signalError) {
-        console.warn('Failed to load signals:', signalError);
-      }
+        const signalsResponse = await api.getSignals({ symbol, tf: timeframe, limit: 50 });
+        const markers = signalsResponse.signals.map(signal => ({
+          time: Math.floor(new Date(signal.ts).getTime() / 1000),
+          position: 'belowBar' as const,
+          color: '#10b981',
+          shape: 'arrowUp' as const,
+          text: `LONG @ $${signal.details.price.toFixed(2)}`,
+          size: 2 as const,
+        }));
+        chartRef.current?.setMarkers(markers as any);
+      } catch (signalError) { console.warn('Failed to load signals:', signalError); }
 
     } catch (err) {
-      const errorMessage = `Failed to load chart data: ${err}`;
-      setError(errorMessage);
-      console.error(errorMessage);
+      const msg = `Failed to load chart data: ${err}`;
+      setError(msg);
+      console.error(msg);
     } finally {
-      if (!silent) {
-        setLoading(false);
-      }
+      if (!silent) setLoading(false);
     }
   };
 
-  const handleRefresh = () => {
-    loadChartData();
-  };
+  const handleRefresh = () => { loadChartData(); };
+
+  // Zoom functions
+  const handleZoomIn = () => { chartRef.current?.zoomIn(); };
+  const handleZoomOut = () => { chartRef.current?.zoomOut(); };
+  const handleFitContent = () => { chartRef.current?.fitContent(); };
+  const handleQuickZoom = (days: number) => { chartRef.current?.zoomToRange(days); };
 
   if (!symbol) {
     return (
@@ -172,21 +193,57 @@ export function Chart({ symbol, timeframe }: ChartProps) {
           <span className="font-semibold">{symbol}</span>
           <span className="text-gray-400">•</span>
           <span className="text-sm text-gray-400">{timeframe.toUpperCase()}</span>
+          <span className="text-gray-400">•</span>
+          <span className="text-xs text-gray-500">Volume: ON</span>
+          <span className="text-gray-400">•</span>
+          
+          {/* Chart Type Tabs */}
+          <div className="flex items-center space-x-1 bg-gray-800 rounded-lg p-1">
+            <button
+              onClick={() => setChartType('candlestick')}
+              className={`text-xs px-2 py-1 rounded flex items-center space-x-1 transition-colors ${
+                chartType === 'candlestick'
+                  ? 'bg-blue-600 text-white'
+                  : 'hover:bg-gray-700 text-gray-300'
+              }`}
+              title="Candlestick chart"
+            >
+              <BarChart3 className="w-3 h-3" />
+              <span>Candles</span>
+            </button>
+            <button
+              onClick={() => setChartType('line')}
+              className={`text-xs px-2 py-1 rounded flex items-center space-x-1 transition-colors ${
+                chartType === 'line'
+                  ? 'bg-green-600 text-white'
+                  : 'hover:bg-gray-700 text-gray-300'
+              }`}
+              title="Line chart"
+            >
+              <TrendingUp className="w-3 h-3" />
+              <span>Line</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center space-x-3">
-          {lastUpdate && (
-            <span className="text-xs text-gray-400">
-              Updated: {lastUpdate.toLocaleTimeString()}
-            </span>
-          )}
+          {/* Quick Zoom Buttons */}
+          <div className="flex items-center space-x-1 bg-gray-800 rounded-lg p-1">
+            <button onClick={() => handleQuickZoom(1)} className="text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300" title="Zoom to 1 day">1D</button>
+            <button onClick={() => handleQuickZoom(7)} className="text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300" title="Zoom to 1 week">1W</button>
+            <button onClick={() => handleQuickZoom(30)} className="text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300" title="Zoom to 1 month">1M</button>
+            <button onClick={handleFitContent} className="text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300" title="Fit all data">ALL</button>
+          </div>
+
+          {/* Zoom In/Out */}
+          <div className="flex items-center space-x-1">
+            <button onClick={handleZoomOut} className="trading-button p-2 hover:bg-gray-700" title="Zoom out"><ZoomOut className="w-4 h-4" /></button>
+            <button onClick={handleZoomIn} className="trading-button p-2 hover:bg-gray-700" title="Zoom in"><ZoomIn className="w-4 h-4" /></button>
+          </div>
+
+          {lastUpdate && <span className="text-xs text-gray-400">Updated: {lastUpdate.toLocaleTimeString()}</span>}
           
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="trading-button p-2 hover:bg-gray-700"
-            title="Refresh chart data"
-          >
+          <button onClick={handleRefresh} disabled={loading} className="trading-button p-2 hover:bg-gray-700" title="Refresh chart data">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
@@ -212,36 +269,24 @@ export function Chart({ symbol, timeframe }: ChartProps) {
           </div>
         )}
 
-        <div
-          ref={containerRef}
-          className="w-full h-full"
-          style={{ minHeight: '400px' }}
-        />
+        <div ref={containerRef} className="w-full h-full" style={{ minHeight: '400px' }} />
       </div>
 
       {/* Chart Legend */}
       <div className="p-3 border-t border-gray-700">
         <div className="flex flex-wrap items-center gap-4 text-xs">
-          <div className="flex items-center space-x-1">
-            <div className="w-3 h-0.5 bg-blue-500"></div>
-            <span className="text-gray-300">EMA 9</span>
-          </div>
-          <div className="flex items-center space-x-1">
-            <div className="w-3 h-0.5 bg-orange-500"></div>
-            <span className="text-gray-300">EMA 21</span>
-          </div>
-          <div className="flex items-center space-x-1">
-            <div className="w-3 h-0.5 bg-purple-500" style={{ borderStyle: 'dashed', borderWidth: '1px 0' }}></div>
-            <span className="text-gray-300">VWAP</span>
-          </div>
-          <div className="flex items-center space-x-1">
-            <div className="w-3 h-0.5 bg-gray-400" style={{ borderStyle: 'dotted', borderWidth: '1px 0' }}></div>
-            <span className="text-gray-300">Bollinger Bands</span>
-          </div>
-          <div className="flex items-center space-x-1">
-            <div className="w-3 h-0.5 bg-teal-500"></div>
-            <span className="text-gray-300">RSI (14)</span>
-          </div>
+          {chartType === 'line' && (
+            <div className="flex items-center space-x-1">
+              <div className="w-3 h-0.5 bg-green-500"></div>
+              <span className="text-gray-300">Price Line</span>
+            </div>
+          )}
+          <div className="flex items-center space-x-1"><div className="w-3 h-2 bg-green-500 opacity-50"></div><span className="text-gray-300">Volume</span></div>
+          <div className="flex items-center space-x-1"><div className="w-3 h-0.5 bg-blue-500"></div><span className="text-gray-300">EMA 9</span></div>
+          <div className="flex items-center space-x-1"><div className="w-3 h-0.5 bg-orange-500"></div><span className="text-gray-300">EMA 21</span></div>
+          <div className="flex items-center space-x-1"><div className="w-3 h-0.5 bg-purple-500" style={{ borderStyle: 'dashed', borderWidth: '1px 0' }}></div><span className="text-gray-300">VWAP</span></div>
+          <div className="flex items-center space-x-1"><div className="w-3 h-0.5 bg-gray-400" style={{ borderStyle: 'dotted', borderWidth: '1px 0' }}></div><span className="text-gray-300">Bollinger Bands</span></div>
+          <div className="flex items-center space-x-1"><div className="w-3 h-0.5 bg-teal-500"></div><span className="text-gray-300">RSI (14)</span></div>
         </div>
       </div>
     </div>

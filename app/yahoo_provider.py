@@ -125,6 +125,22 @@ class YahooFinanceProvider:
             logger.error(f"Yahoo Finance fetch error for {symbol}: {e}")
             return None
     
+    async def get_market_cap(self, symbol: str) -> Optional[int]:
+        """Get market capitalization for a symbol from Yahoo Finance."""
+        try:
+            loop = asyncio.get_event_loop()
+            ticker = await loop.run_in_executor(self.executor, yf.Ticker, symbol)
+            info = await loop.run_in_executor(self.executor, lambda: ticker.info)
+            
+            market_cap = info.get('marketCap')
+            if market_cap:
+                return int(market_cap)
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Market cap fetch error for {symbol}: {e}")
+            return None
+    
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
         Get real-time quote from Yahoo Finance.
