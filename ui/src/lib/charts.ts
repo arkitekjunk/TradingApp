@@ -322,13 +322,23 @@ export class LineChart {
   }
 
   fitContent() {
-    this.chart.timeScale().fitContent();
-    this.rsiChart.timeScale().fitContent();
+    // Clear any saved zoom state first
     this.userHasZoomed = false;
     this.savedTimeRange = null;
     if (this.zoomPersistKey) {
       try { localStorage.removeItem(`zoom:${this.zoomPersistKey}`); } catch {}
     }
+    
+    // Force both time and price scales to fit content
+    this.chart.timeScale().fitContent();
+    this.rsiChart.timeScale().fitContent();
+    
+    // Also reset price scale to auto-fit the data range
+    try {
+      (this.chart as any).priceScale('right').applyOptions({
+        autoScale: true
+      });
+    } catch {}
   }
 
   zoomToRange(days: number) {
@@ -372,6 +382,9 @@ export class TradingChart {
   private dragPanEnabled: boolean = true;
 
   constructor(container: HTMLElement) {
+    // Clear any existing content first
+    container.innerHTML = '';
+    
     // Main chart
     this.chart = createChart(container, {
       width: container.clientWidth,
@@ -652,13 +665,23 @@ export class TradingChart {
   }
 
   fitContent() {
-    this.chart.timeScale().fitContent();
-    this.rsiChart.timeScale().fitContent();
+    // Clear any saved zoom state first
     this.userHasZoomed = false;
     this.savedTimeRange = null;
     if (this.zoomPersistKey) {
       try { localStorage.removeItem(`zoom:${this.zoomPersistKey}`); } catch {}
     }
+    
+    // Force both time and price scales to fit content
+    this.chart.timeScale().fitContent();
+    this.rsiChart.timeScale().fitContent();
+    
+    // Also reset price scale to auto-fit the data range
+    try {
+      (this.chart as any).priceScale('right').applyOptions({
+        autoScale: true
+      });
+    } catch {}
   }
 
   zoomToRange(days: number) {

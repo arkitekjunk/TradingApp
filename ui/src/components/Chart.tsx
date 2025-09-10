@@ -17,6 +17,7 @@ export function Chart({ symbol, timeframe }: ChartProps) {
   const [error, setError] = useState<string>('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [chartType, setChartType] = useState<ChartType>('candlestick');
+  const [chartLoading, setChartLoading] = useState(false);
 
   // Initialize chart
   useEffect(() => {
@@ -27,11 +28,10 @@ export function Chart({ symbol, timeframe }: ChartProps) {
 
     const initChart = async () => {
       try {
-        console.log('Chart: Initializing chart type:', chartType);
+        setChartLoading(true);
         
         // Clean up existing chart first
         if (chartRef.current) {
-          console.log('Chart: Destroying existing chart');
           try {
             chartRef.current.destroy();
           } catch (destroyError) {
@@ -40,16 +40,11 @@ export function Chart({ symbol, timeframe }: ChartProps) {
           chartRef.current = null;
         }
 
-        // Small delay to ensure cleanup is complete
-        await new Promise(resolve => setTimeout(resolve, 10));
-        
         if (!mounted || !container) return;
 
         if (chartType === 'candlestick') {
-          console.log('Chart: Creating TradingChart');
           chartRef.current = new TradingChart(container);
         } else {
-          console.log('Chart: Creating LineChart');
           chartRef.current = new LineChart(container);
         }
         
@@ -57,12 +52,15 @@ export function Chart({ symbol, timeframe }: ChartProps) {
         
         // Default interactions: wheel zoom and drag pan enabled
         chartRef.current.setInteractionOptions({ wheelZoom: true, dragPan: true });
-        // Persist zoom per symbol+timeframe+chartType
+        // Clear any previous zoom state to prevent scaling issues when switching chart types
+        chartRef.current.fitContent();
+        // Set persistence key after clearing zoom
         chartRef.current.setZoomPersistenceKey(`${symbol}:${timeframe}:${chartType}`);
         
-        console.log('Chart: Chart initialization completed');
+        setChartLoading(false);
       } catch (error) {
         console.error('Chart: Failed to initialize chart:', error);
+        setChartLoading(false);
         if (mounted) {
           setError(`Failed to initialize chart: ${error}`);
         }
@@ -105,12 +103,12 @@ export function Chart({ symbol, timeframe }: ChartProps) {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Load data when symbol or timeframe changes
+  // Load data when symbol, timeframe, or chart type changes
   useEffect(() => {
     if (symbol && chartRef.current) {
       loadChartData();
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, chartType]);
 
   // Auto-refresh data
   useEffect(() => {
@@ -123,7 +121,10 @@ export function Chart({ symbol, timeframe }: ChartProps) {
     if (!symbol || !chartRef.current) return;
 
     try {
-      if (!silent) { setLoading(true); setError(''); }
+      if (!silent) { 
+        setLoading(true); 
+        setError(''); 
+      }
 
       const now = new Date();
       const from = new Date();
@@ -269,7 +270,23 @@ export function Chart({ symbol, timeframe }: ChartProps) {
           </div>
         )}
 
-        <div ref={containerRef} className="w-full h-full" style={{ minHeight: '400px' }} />
+        <div className="relative w-full h-full" style={{ minHeight: '400px' }}>
+          <div ref={containerRef} className="w-full h-full" />
+          
+          {/* Chart loading animation */}
+          {(loading || chartLoading) && (
+            <div className="absolute inset-0 bg-gray-900/95 flex items-center justify-center z-20 backdrop-blur-sm">
+              <div className="flex flex-col items-center space-y-4">
+                <div className="flex space-x-2">
+                  <div className="w-3 h-3 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                  <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                  <div className="w-3 h-3 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                </div>
+                <span className="text-blue-300 text-base font-medium">Loading {chartType === 'candlestick' ? 'Candlestick' : 'Line'} Chart...</span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Chart Legend */}
