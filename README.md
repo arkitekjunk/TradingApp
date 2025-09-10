@@ -13,8 +13,9 @@ A production-ready real-time trading application that aggregates market data fro
 - **Storage Robustness**: Prevents data loss during symbol churn with proper deduplication and partial candle persistence
 - **Health & Metrics**: Comprehensive health monitoring with quota tracking and real-time status indicators
 - **Market Calendar**: Complete NYSE/NASDAQ holiday calendar (2024-2026) with early close detection
-- **Dynamic Universe**: Automatically fetches top 50 symbols with fallback support
-- **Professional UI**: React-based trading interface with real-time charts, watchlist, and timeframe switching
+- **Dynamic Universe**: Automatically fetches top 50 NASDAQ symbols with fallback support (limited to exactly 50 for WebSocket compatibility)
+- **Professional UI**: React-based trading interface with real-time charts, company logos, market cap display, and dual chart visualization modes
+- **Market Cap Integration**: Real-time market capitalization data from Yahoo Finance with formatted display (B/T suffixes)
 - **Alert System**: Discord and Telegram webhook notifications
 - **Extended Hours**: Optional pre-market (4:00-9:30 AM ET) and after-hours (4:00-8:00 PM ET) inclusion
 - **Production Ready**: Comprehensive error handling, logging, and browser cache management
@@ -37,7 +38,7 @@ A production-ready real-time trading application that aggregates market data fro
 - **Styling**: TailwindCSS for responsive design
 - **Charts**: Lightweight Charts (TradingView open-source) with dual visualization modes (candlestick/line charts) and multi-timeframe support
 - **Icons**: Lucide React
-- **Real-time Features**: Live WebSocket status, symbol watchlist, and dynamic timeframe switching
+- **Real-time Features**: Live WebSocket status, symbol watchlist with company logos, dynamic market cap display, and dual chart mode switching
 - **Browser Optimization**: Cache-busting for seamless updates and /charts endpoint for reliable access
 
 ### Infrastructure
@@ -170,6 +171,7 @@ reconciliation:
 - `GET /api/universe` - Get current universe symbols
 - `POST /api/universe/refresh` - Force refresh universe  
 - `GET /api/candles?symbol=AAPL&tf=5m` - Get candle data (supports 5m, 15m, 1h, 4h, 1d)
+- `GET /api/market-cap/{symbol}` - Get formatted market capitalization for a symbol
 - `GET /api/signals` - Get recent trading signals
 - `GET /charts` - Serve charts interface with cache-busting headers
 
@@ -184,15 +186,16 @@ reconciliation:
 
 ### Data Flow
 
-1. **Universe Management**: Fetches top 50 symbols with fallback support when API quota exhausted
+1. **Universe Management**: Fetches top 50 NASDAQ symbols with fallback support when API quota exhausted
 2. **Historical Data**: Yahoo Finance provides unlimited 60-day 5-minute historical data
 3. **Real-time Streaming**: Finnhub WebSocket for live trade data (50 concurrent symbols on free plan)
 4. **Timeframe Aggregation**: Dynamic conversion from 5m base data to 15m, 1h, 4h, 1d using pandas resample
 5. **Session-Aware Processing**: VWAP and indicators reset at market session boundaries (9:30 AM ET)
-6. **Signal Processing**: Technical indicators calculated with session awareness and market calendar integration
-7. **Chart Interface**: Interactive TradingView-style charts with real-time timeframe switching
-8. **Alert Dispatch**: Webhooks sent to configured Discord/Telegram channels
-9. **Health Monitoring**: Real-time WebSocket status and connection monitoring
+6. **Signal Processing**: Technical indicators calculated with session awareness and market calendar integration  
+7. **Chart Interface**: Interactive TradingView-style charts with dual visualization modes (candlestick/line) and real-time timeframe switching
+8. **UI Enhancement**: Company logos via Clearbit, real-time market cap display with B/T formatting, and NASDAQ-focused watchlist
+9. **Alert Dispatch**: Webhooks sent to configured Discord/Telegram channels
+10. **Health Monitoring**: Real-time WebSocket status and connection monitoring
 
 ### Storage Schema
 
